@@ -1,0 +1,10 @@
+[package]
+name = "rust-xml"
+version = "0.1.0"
+authors = ["Michael Heinrich <michael.heinrich@centric.eu>"]
+
+[lib]
+name = "xml"
+path = "src/lib.rs"
+
+[dependencies]
