@@ -111,7 +111,15 @@ impl XmlParse for String {
 			}
 		}
 		tokens.push(XmlToken::new_value(value));
-		next
+		next.and_then(|c| 
+			if c.is_quote() {
+				tokens.push(XmlToken::new_quote());
+				iter.next()
+			}
+			else {
+				panic!("missing quote for attribute value");
+			}
+		)
 	}
 	fn parse_name(value: &char, iter: &mut Chars, tokens: &mut XmlTokenVec) -> Option<char> {
 		use tokenizer::XmlValidation;
@@ -123,8 +131,9 @@ impl XmlParse for String {
 			loop {
 				next = iter.next();
 				if next.is_some() {
-					if next.unwrap().is_valid_char_in_element_name() {
-						name.push(next.unwrap());
+					let c = next.unwrap();
+					if c.is_valid_char_in_element_name() {
+						name.push(c);
 					}
 					else {
 						break;
@@ -143,6 +152,7 @@ impl XmlParse for String {
 	}
 	fn parse_whitespace(value: &char, iter: &mut Chars, tokens: &mut XmlTokenVec) -> Option<char> {
 		// find all same as value
+		assert!(value.is_whitespace());
 		let mut next = iter.next();
 		let mut count = 1;
 		loop {
@@ -150,10 +160,9 @@ impl XmlParse for String {
 				let c = next.unwrap();
 				if &c == value {
 					count += 1;
-					next = Self::parse_whitespace(&c, iter, tokens);// parse whitespace
+					next = iter.next();
 				}
 				else {
-					tokens.push(XmlToken::Whitespace(WhitespaceKind::from_char(c, count).unwrap()));
 					break;
 				}
 			}
@@ -161,6 +170,7 @@ impl XmlParse for String {
 				break;
 			}
 		}
+		tokens.push(XmlToken::Whitespace(WhitespaceKind::from_char(*value, count).unwrap()));
 		next
 	}
 }
@@ -179,18 +189,16 @@ impl XmlTokenize for String {
 				else {
 					let token = XmlToken::from_char(*c);
 					match token {
-						Some(Begin) => {
-							result.push(token.unwrap());
-							iter.next()
-						},
+						Some(Begin) |
 						Some(Close) |
-						Some(End) => { 
+						Some(End) |
+						Some(Assign) => { 
 							result.push(token.unwrap());
 							iter.next()
 						},
 						Some(Quote) => {
 							result.push(token.unwrap());
-							Self::parse_value(c, &mut iter, & mut result)
+							Self::parse_value(c, &mut iter, &mut result)
 						},
 						_ => {
 							Self::parse_name(c, &mut iter, &mut result)
@@ -202,7 +210,7 @@ impl XmlTokenize for String {
 				break;
 			}
 		}
-		result.iter().rev().cloned().collect()
+		result
 	}
 }
 
@@ -236,33 +244,87 @@ mod tests {
 		assert_eq!(tokenizer.len(), 0);
 	}
 	#[test]
+	fn new_tokenizer_one_space() {
+		let tokenizer = " ".to_string().tokenize();
+		{
+			let mut iter = tokenizer.iter();
+			assert_eq!(iter.next().unwrap(), &XmlToken::Whitespace(WhitespaceKind::Space(1)));
+		}
+	}
+	#[test]
 	fn new_tokenizer_xml_element() {
-		let mut tokenizer = "<element>".to_string().tokenize();
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_begin());
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_name("element".to_string()));
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_end());
+		let tokenizer = "<element>".to_string().tokenize();
+		{
+			let mut iter = tokenizer.iter();
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_begin());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_name("element".to_string()));
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_end());
+		}
+	}
+	#[test]
+	fn new_tokenizer_xml_element_to_string() {
+		let tokenizer = "<element>".to_string().tokenize();
+		let mut text = String::new();
+		for token in tokenizer {
+			text = text + &token.to_string();
+		}
+		assert_eq!(text, "<element>".to_string());
 	}
 	#[test]
 	fn new_tokenizer_xml_full_element() {
-		let mut tokenizer = "<element/>".to_string().tokenize();
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_begin());
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_name("element".to_string()));
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_close());
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_end());
+		let tokenizer = "<element/>".to_string().tokenize();
+		{
+			let mut iter = tokenizer.iter();
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_begin());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_name("element".to_string()));
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_close());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_end());
+		}
 	}
 	#[test]
 	fn new_tokenizer_xml_element_in_element() {
-		let mut tokenizer = "<element><level/></element>".to_string().tokenize();
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_begin());
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_name("element".to_string()));
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_end());
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_begin());
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_name("level".to_string()));
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_close());
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_end());
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_begin());
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_close());
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_name("element".to_string()));
-		assert_eq!(tokenizer.pop().unwrap(), XmlToken::new_end());
+		let tokenizer = "<element><level/></element>".to_string().tokenize();
+		{
+			let mut iter = tokenizer.iter();
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_begin());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_name("element".to_string()));
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_end());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_begin());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_name("level".to_string()));
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_close());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_end());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_begin());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_close());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_name("element".to_string()));
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_end());
+		}
+	}
+	#[test]
+	fn new_tokenizer_xml_full_element_with_attribute() {
+		let tokenizer = "<element attribute=\"value\"/>".to_string().tokenize();
+		assert_eq!(tokenizer.len(), 10);
+		{
+			let mut iter = tokenizer.iter();
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_begin());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_name("element".to_string()));
+			assert_eq!(iter.next().unwrap(), &XmlToken::Whitespace(WhitespaceKind::Space(1)));
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_name("attribute".to_string()));
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_assign());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_quote());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_value("value".to_string()));
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_quote());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_close());
+			assert_eq!(iter.next().unwrap(), &XmlToken::new_end());
+		}
+	}
+	#[test]
+	fn new_tokenizer_xml_full_element_with_attribute_to_string() {
+		let tokenizer = "<element attribute=\"value\"/>".to_string().tokenize();
+		assert_eq!(tokenizer.len(), 10);
+		let mut text = String::new();
+		for token in tokenizer {
+			text += &token.to_string();
+		}
+		assert_eq!(text, "<element attribute=\"value\"/>".to_string());
 	}
 }
